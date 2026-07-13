@@ -1,0 +1,53 @@
+package proxy
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+
+	"github.com/denysvitali/grok-proxy/internal/config"
+	"github.com/denysvitali/grok-proxy/internal/grok"
+	"github.com/sirupsen/logrus"
+)
+
+type Server struct {
+	config config.Config
+	grok   *grok.Client
+	log    *logrus.Logger
+}
+
+func New(cfg config.Config, client *grok.Client, logger *logrus.Logger) *Server {
+	return &Server{config: cfg, grok: client, log: logger}
+}
+
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /v1/models", s.authenticate(s.models))
+	mux.HandleFunc("POST /v1/responses", s.authenticate(s.responses))
+	mux.HandleFunc("POST /v1/messages", s.authenticate(s.messages))
+	mux.HandleFunc("POST /v1/messages/count_tokens", s.authenticate(s.countTokens))
+	return s.recoverPanics(s.logRequests(s.withRequestID(mux)))
+}
+
+func (s *Server) ValidateListenAddress() error {
+	host, _, err := net.SplitHostPort(s.config.Server.Listen)
+	if err != nil {
+		return fmt.Errorf("invalid listen address: %w", err)
+	}
+	ip := net.ParseIP(host)
+	isLoopback := host == "localhost" || ip != nil && ip.IsLoopback()
+	if !isLoopback && s.config.Server.APIKey == "" && !s.config.Server.AllowInsecure {
+		return errors.New("refusing a non-loopback listener without GROK_PROXY_API_KEY; use --allow-insecure to override")
+	}
+	return nil
+}
+
+type healthResponse struct {
+	Status string `json:"status"`
+}
+
+func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
+}
