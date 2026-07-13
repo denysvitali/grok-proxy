@@ -1,0 +1,9 @@
+[project]
+name = "grok-subscription-client"
+version = "0.1.0"
+description = "Standalone Grok subscription API client"
+requires-python = ">=3.11"
+
+[project.scripts]
+grok-sub = "grok_sub:main"
+
