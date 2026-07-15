@@ -124,6 +124,7 @@ func (c *DashboardClient) get(ctx context.Context, endpoint, mode string, includ
 	request.Header.Set("x-grok-client-mode", mode)
 	if includeVersion {
 		request.Header.Set("x-grok-client-version", config.ClientVersion)
+		request.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
 	}
 	response, err := c.HTTP.Do(request)
 	if err != nil {
@@ -196,6 +197,9 @@ func accountFromObject(data map[string]any) Account {
 }
 
 func decodeBilling(body []byte) (Billing, error) {
+	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("<")) {
+		return Billing{}, errors.New("billing service returned HTML instead of JSON (subscription authentication was not accepted)")
+	}
 	root, err := decodeObject(body)
 	if err != nil {
 		return Billing{}, fmt.Errorf("decode billing data: %w", err)

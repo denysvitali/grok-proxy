@@ -310,7 +310,7 @@ func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
 			if got := request.Header.Get("x-grok-client-version"); got != config.ClientVersion {
 				t.Errorf("billing client version = %q", got)
 			}
-			if got := request.Header.Get("X-XAI-Token-Auth"); got != "" {
+			if got := request.Header.Get("X-XAI-Token-Auth"); got != "xai-grok-cli" {
 				t.Errorf("billing token-auth header = %q", got)
 			}
 			return jsonResponse(http.StatusOK, map[string]any{
