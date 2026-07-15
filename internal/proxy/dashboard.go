@@ -35,11 +35,12 @@ type dashboardPage struct {
 	Usage         dashboardUsage
 	UsageError    string
 	ProxyRows     []dashboardRow
+	ProxyHost     string
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, request *http.Request) {
 	setDashboardHeaders(w)
-	page := dashboardPage{ProxyRows: s.proxyRows()}
+	page := dashboardPage{ProxyRows: s.proxyRows(), ProxyHost: request.Host}
 	if s.tokens == nil || s.tokens.Store == nil {
 		s.renderDashboard(w, page)
 		return
@@ -72,6 +73,8 @@ func (s *Server) dashboard(w http.ResponseWriter, request *http.Request) {
 	if billingErr != nil {
 		page.UsageError = "Usage information is temporarily unavailable."
 		s.log.WithError(billingErr).Warn("dashboard billing request failed")
+	} else if !billing.Available {
+		page.UsageError = "No billing data is available for this account."
 	} else {
 		page.Usage = usageView(billing)
 	}
@@ -136,13 +139,16 @@ func accountView(account grok.Account) (string, []dashboardRow) {
 }
 
 func usageView(billing grok.Billing) dashboardUsage {
-	view := dashboardUsage{}
+	view := dashboardUsage{HasPercent: true}
+	percent := 0.0
 	if billing.CreditUsagePercent.Valid {
-		percent := billing.CreditUsagePercent.Value
-		view.HasPercent = true
-		view.Percent = fmt.Sprintf("%.1f%%", percent)
-		view.PercentValue = strconv.FormatFloat(max(0, min(100, percent)), 'f', 2, 64)
+		percent = billing.CreditUsagePercent.Value
+	} else if billing.MonthlyLimit.Valid && billing.MonthlyLimit.Value > 0 && billing.Used.Valid {
+		percent = billing.Used.Value / billing.MonthlyLimit.Value * 100
 	}
+	percent = max(0, min(100, percent))
+	view.Percent = fmt.Sprintf("%.1f%%", percent)
+	view.PercentValue = strconv.FormatFloat(percent, 'f', 2, 64)
 	addRow(&view.Rows, "Subscription", billing.SubscriptionTier)
 	addRow(&view.Rows, "Period", strings.TrimPrefix(billing.CurrentPeriod.Type, "USAGE_PERIOD_TYPE_"))
 	addRow(&view.Rows, "Period start", firstDisplay(billing.CurrentPeriod.Start, billing.BillingPeriodStart))
@@ -206,7 +212,7 @@ func enabledDisabled(value bool) string {
 func setDashboardHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
@@ -240,6 +246,10 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype
     progress { width: 100%; height: 12px; margin: 4px 0 22px; accent-color: #a78bfa; }
     .notice { padding: 16px; border: 1px solid #713f12; background: #422006; color: #fde68a; border-radius: 12px; }
     .empty { text-align: center; padding: 64px 24px; }
+    .setup { display: grid; gap: 12px; } .setup label { color: #a1a1aa; font-size: .875rem; }
+    .setup input, .setup textarea { width: 100%; color: #fafafa; background: #09090b; border: 1px solid #3f3f46; border-radius: 10px; padding: 12px; font: .875rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .setup textarea { min-height: 104px; resize: vertical; } .setup-actions { display: flex; align-items: center; gap: 12px; }
+    .copy-status { color: #a1a1aa; font-size: .875rem; }
     footer { color: #71717a; margin-top: 24px; font-size: .875rem; }
     @media (max-width: 720px) { main { padding-top: 28px; } header { display: block; } .actions { margin-top: 20px; } .grid { grid-template-columns: 1fr; } .wide { grid-column: auto; } .row { grid-template-columns: 1fr; gap: 4px; } }
   </style>
@@ -265,7 +275,37 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype
   {{else}}
   <section class="card empty"><h2>Account</h2><div class="identity">Sign in to view your usage</div><p class="muted">Connect your xAI account to load subscription, credit, and account information.</p><form method="post" action="/login"><button class="primary" type="submit">Sign in with xAI</button></form></section>
   {{end}}
+  <section class="card wide setup">
+    <h2>Claude Code</h2>
+    <p class="muted">Set the proxy hostname, then copy and run this command. Include a port if needed.</p>
+    <label for="proxy-host">Proxy hostname</label>
+    <input id="proxy-host" type="text" value="{{.ProxyHost}}" autocomplete="off" spellcheck="false">
+    <textarea id="claude-command" readonly aria-label="Claude Code configuration command"></textarea>
+    <div class="setup-actions"><button id="copy-claude-command" type="button">Copy command</button><span id="copy-status" class="copy-status" aria-live="polite"></span></div>
+    <p class="muted">If client authentication is enabled, replace <code>local</code> with the configured API key.</p>
+  </section>
   <footer>Usage is fetched directly from the same account services used by Grok Build.</footer>
 </main>
+<script>
+  const proxyHost = document.getElementById("proxy-host");
+  const claudeCommand = document.getElementById("claude-command");
+  const copyClaudeCommand = document.getElementById("copy-claude-command");
+  const copyStatus = document.getElementById("copy-status");
+  function updateClaudeCommand() {
+    claudeCommand.value = "ANTHROPIC_BASE_URL=" + window.location.protocol + "//" + proxyHost.value.trim() + " \\\n+ANTHROPIC_AUTH_TOKEN=local \\\n+claude";
+  }
+  proxyHost.addEventListener("input", updateClaudeCommand);
+  copyClaudeCommand.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(claudeCommand.value);
+      copyStatus.textContent = "Copied";
+    } catch {
+      claudeCommand.select();
+      document.execCommand("copy");
+      copyStatus.textContent = "Copied";
+    }
+  });
+  updateClaudeCommand();
+</script>
 </body>
 </html>`))

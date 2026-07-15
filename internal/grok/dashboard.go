@@ -80,6 +80,7 @@ type UsagePeriod struct {
 }
 
 type Billing struct {
+	Available            bool
 	CreditUsagePercent   Number
 	CurrentPeriod        UsagePeriod
 	MonthlyLimit         Number
@@ -208,8 +209,15 @@ func decodeBilling(body []byte) (Billing, error) {
 		return Billing{}, fmt.Errorf("decode billing data: %w", err)
 	}
 	response := unwrap(root, "data", "billing", "credits")
-	data, ok := objectValue(response, "config")
-	if !ok {
+	configValue, hasConfig := lookup(response, "config")
+	data, ok := configValue.(map[string]any)
+	if hasConfig && !ok {
+		return Billing{
+			OnDemandEnabled:  boolValue(response, "onDemandEnabled", "on_demand_enabled"),
+			SubscriptionTier: stringValue(response, "subscriptionTier", "subscription_tier"),
+		}, nil
+	}
+	if !hasConfig {
 		data = response
 	}
 	period, _ := objectValue(data, "currentPeriod", "current_period")
@@ -219,6 +227,7 @@ func decodeBilling(body []byte) (Billing, error) {
 		End:   stringValue(period, "end"),
 	}
 	return Billing{
+		Available:            true,
 		CreditUsagePercent:   numberValue(data, "creditUsagePercent", "credit_usage_percent"),
 		CurrentPeriod:        current,
 		MonthlyLimit:         numberValue(data, "monthlyLimit", "monthly_limit"),

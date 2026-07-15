@@ -259,6 +259,7 @@ func TestDashboardPromptsForLoginWithoutCredentials(t *testing.T) {
 	manager := &auth.Manager{Store: &auth.Store{Path: filepath.Join(t.TempDir(), "auth.json")}}
 	server := New(config.Config{}, nil, manager, testLogger())
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Host = "proxy.example:8443"
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -269,6 +270,15 @@ func TestDashboardPromptsForLoginWithoutCredentials(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q", got)
+	}
+	page := recorder.Body.String()
+	for _, expected := range []string{"Claude Code", `value="proxy.example:8443"`, "ANTHROPIC_BASE_URL=", "Copy command"} {
+		if !strings.Contains(page, expected) {
+			t.Errorf("dashboard missing %q: %s", expected, page)
+		}
+	}
+	if got := recorder.Header().Get("Content-Security-Policy"); !strings.Contains(got, "script-src 'unsafe-inline'") {
+		t.Errorf("Content-Security-Policy = %q", got)
 	}
 }
 
@@ -375,5 +385,23 @@ func TestDashboardFallsBackToOAuthClaimsWhenAccountEnrichmentFails(t *testing.T)
 	}
 	if strings.Contains(page, accessToken) {
 		t.Fatal("dashboard exposed the access token")
+	}
+}
+
+func TestUsageViewFallsBackToLegacyLimitAndUsed(t *testing.T) {
+	view := usageView(grok.Billing{
+		Available:    true,
+		MonthlyLimit: grok.Number{Value: 1000, Valid: true},
+		Used:         grok.Number{Value: 425, Valid: true},
+	})
+	if !view.HasPercent || view.Percent != "42.5%" || view.PercentValue != "42.50" {
+		t.Fatalf("usage percentage = %#v", view)
+	}
+}
+
+func TestUsageViewShowsZeroWhenPercentageAndLegacyLimitAreAbsent(t *testing.T) {
+	view := usageView(grok.Billing{Available: true})
+	if !view.HasPercent || view.Percent != "0.0%" || view.PercentValue != "0.00" {
+		t.Fatalf("usage percentage = %#v", view)
 	}
 }
