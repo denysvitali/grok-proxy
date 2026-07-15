@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -280,12 +281,6 @@ func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
 		if got := request.Header.Get("Authorization"); got != "Bearer subscription-token" {
 			t.Errorf("Authorization = %q", got)
 		}
-		if got := request.Header.Get("X-XAI-Token-Auth"); got != "xai-grok-cli" {
-			t.Errorf("X-XAI-Token-Auth = %q", got)
-		}
-		if got := request.Header.Get("x-grok-client-version"); got != config.ClientVersion {
-			t.Errorf("x-grok-client-version = %q", got)
-		}
 		switch request.URL.Host {
 		case "accounts.x.ai":
 			if request.URL.Path != "/user" || request.URL.Query().Get("include") != "subscription" {
@@ -293,6 +288,12 @@ func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
 			}
 			if got := request.Header.Get("x-grok-client-mode"); got != "cli" {
 				t.Errorf("account mode = %q", got)
+			}
+			if got := request.Header.Get("x-grok-client-version"); got != "" {
+				t.Errorf("account client version = %q", got)
+			}
+			if got := request.Header.Get("X-XAI-Token-Auth"); got != "" {
+				t.Errorf("account token-auth header = %q", got)
 			}
 			return jsonResponse(http.StatusOK, map[string]any{
 				"userId": "user-123", "firstName": "Ada", "lastName": "Lovelace",
@@ -305,6 +306,12 @@ func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
 			}
 			if got := request.Header.Get("x-grok-client-mode"); got != "billing" {
 				t.Errorf("billing mode = %q", got)
+			}
+			if got := request.Header.Get("x-grok-client-version"); got != config.ClientVersion {
+				t.Errorf("billing client version = %q", got)
+			}
+			if got := request.Header.Get("X-XAI-Token-Auth"); got != "" {
+				t.Errorf("billing token-auth header = %q", got)
 			}
 			return jsonResponse(http.StatusOK, map[string]any{
 				"creditUsagePercent": 42.5, "monthlyLimit": 1000, "onDemandUsed": 12,
@@ -330,6 +337,39 @@ func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
 		}
 	}
 	if strings.Contains(page, "subscription-token") {
+		t.Fatal("dashboard exposed the access token")
+	}
+}
+
+func TestDashboardFallsBackToOAuthClaimsWhenAccountEnrichmentFails(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"userId":"user-456","first_name":"Grace","last_name":"Hopper","email":"grace@example.com"}`))
+	accessToken := "header." + payload + ".signature"
+	store := &auth.Store{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(&auth.Token{AccessToken: accessToken, ExpiresAt: float64(time.Now().Add(time.Hour).Unix())}); err != nil {
+		t.Fatal(err)
+	}
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host == "accounts.x.ai" {
+			return jsonResponse(http.StatusForbidden, map[string]any{"error": "forbidden"}), nil
+		}
+		return jsonResponse(http.StatusOK, map[string]any{"creditUsagePercent": 10}), nil
+	})
+	manager := &auth.Manager{Store: store, HTTPClient: &http.Client{Transport: transport}}
+	server := New(config.Config{}, nil, manager, testLogger())
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	page := recorder.Body.String()
+	for _, expected := range []string{"Grace Hopper", "grace@example.com", "Some account details could not be loaded."} {
+		if !strings.Contains(page, expected) {
+			t.Errorf("dashboard missing %q: %s", expected, page)
+		}
+	}
+	if strings.Contains(page, accessToken) {
 		t.Fatal("dashboard exposed the access token")
 	}
 }

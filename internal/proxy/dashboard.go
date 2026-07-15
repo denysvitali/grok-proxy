@@ -27,13 +27,14 @@ type dashboardUsage struct {
 }
 
 type dashboardPage struct {
-	LoggedIn     bool
-	AccountName  string
-	AccountRows  []dashboardRow
-	AccountError string
-	Usage        dashboardUsage
-	UsageError   string
-	ProxyRows    []dashboardRow
+	LoggedIn      bool
+	AccountName   string
+	AccountRows   []dashboardRow
+	AccountError  string
+	AccountNotice string
+	Usage         dashboardUsage
+	UsageError    string
+	ProxyRows     []dashboardRow
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, request *http.Request) {
@@ -72,8 +73,14 @@ func (s *Server) dashboard(w http.ResponseWriter, request *http.Request) {
 	group.Wait()
 
 	if accountErr != nil {
-		page.AccountError = "Account information is temporarily unavailable."
 		s.log.WithError(accountErr).Warn("dashboard account request failed")
+		account, accountErr = grok.AccountFromToken(token.AccessToken)
+		if accountErr != nil {
+			page.AccountError = "Account information is temporarily unavailable."
+		} else {
+			page.AccountNotice = "Some account details could not be loaded."
+			page.AccountName, page.AccountRows = accountView(account)
+		}
 	} else {
 		page.AccountName, page.AccountRows = accountView(account)
 	}
@@ -263,7 +270,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype
   <div class="grid">
     <section class="card">
       <h2>Account</h2>
-      {{if .AccountError}}<p class="notice">{{.AccountError}}</p>{{else}}<div class="identity">{{.AccountName}}</div><dl>{{range .AccountRows}}<div class="row"><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
+      {{if .AccountError}}<p class="notice">{{.AccountError}}</p>{{else}}{{if .AccountNotice}}<p class="notice">{{.AccountNotice}}</p>{{end}}<div class="identity">{{.AccountName}}</div><dl>{{range .AccountRows}}<div class="row"><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
     </section>
     <section class="card">
       <h2>Usage</h2>

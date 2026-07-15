@@ -3,6 +3,7 @@ package grok
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -95,7 +96,7 @@ type Billing struct {
 }
 
 func (c *DashboardClient) Account(ctx context.Context, accessToken string) (Account, error) {
-	body, err := c.get(ctx, c.AccountsURL, "cli", accessToken)
+	body, err := c.get(ctx, c.AccountsURL, "cli", false, accessToken)
 	if err != nil {
 		return Account{}, err
 	}
@@ -103,14 +104,14 @@ func (c *DashboardClient) Account(ctx context.Context, accessToken string) (Acco
 }
 
 func (c *DashboardClient) Billing(ctx context.Context, accessToken string) (Billing, error) {
-	body, err := c.get(ctx, c.BillingURL, "billing", accessToken)
+	body, err := c.get(ctx, c.BillingURL, "billing", true, accessToken)
 	if err != nil {
 		return Billing{}, err
 	}
 	return decodeBilling(body)
 }
 
-func (c *DashboardClient) get(ctx context.Context, endpoint, mode, accessToken string) ([]byte, error) {
+func (c *DashboardClient) get(ctx context.Context, endpoint, mode string, includeVersion bool, accessToken string) ([]byte, error) {
 	if accessToken == "" {
 		return nil, errors.New("missing access token")
 	}
@@ -120,10 +121,10 @@ func (c *DashboardClient) get(ctx context.Context, endpoint, mode, accessToken s
 	}
 	request.Header.Set("Authorization", "Bearer "+accessToken)
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
-	request.Header.Set("x-grok-client-version", config.ClientVersion)
 	request.Header.Set("x-grok-client-mode", mode)
-	request.Header.Set("User-Agent", "grok-proxy/"+config.ClientVersion)
+	if includeVersion {
+		request.Header.Set("x-grok-client-version", config.ClientVersion)
+	}
 	response, err := c.HTTP.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("request account service: %w", err)
@@ -139,12 +140,38 @@ func (c *DashboardClient) get(ctx context.Context, endpoint, mode, accessToken s
 	return body, nil
 }
 
+// AccountFromToken recovers the basic identity claims that Grok extracts from
+// the OAuth access token before its optional /user enrichment request.
+func AccountFromToken(accessToken string) (Account, error) {
+	parts := strings.Split(accessToken, ".")
+	if len(parts) != 3 || len(parts[1]) > 1<<20 {
+		return Account{}, errors.New("access token is not a JWT")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return Account{}, fmt.Errorf("decode access token claims: %w", err)
+	}
+	claims, err := decodeObject(payload)
+	if err != nil {
+		return Account{}, fmt.Errorf("decode access token claims: %w", err)
+	}
+	account := accountFromObject(claims)
+	if account.UserID == "" && account.Email == "" && account.Name() == "" {
+		return Account{}, errors.New("access token contains no account identity claims")
+	}
+	return account, nil
+}
+
 func decodeAccount(body []byte) (Account, error) {
 	root, err := decodeObject(body)
 	if err != nil {
 		return Account{}, fmt.Errorf("decode account data: %w", err)
 	}
 	data := unwrap(root, "data", "user")
+	return accountFromObject(data), nil
+}
+
+func accountFromObject(data map[string]any) Account {
 	subscription, _ := objectValue(data, "subscription")
 	return Account{
 		UserID:                    stringValue(data, "userId", "user_id", "id"),
@@ -165,7 +192,7 @@ func decodeAccount(body []byte) (Account, error) {
 		TeamBlockedReasons:        stringsValue(data, "teamBlockedReasons", "team_blocked_reasons"),
 		CodingDataRetentionOptOut: boolValue(data, "codingDataRetentionOptOut", "coding_data_retention_opt_out"),
 		HasGrokCodeAccess:         boolValue(data, "hasGrokCodeAccess", "has_grok_code_access"),
-	}, nil
+	}
 }
 
 func decodeBilling(body []byte) (Billing, error) {
