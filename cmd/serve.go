@@ -36,7 +36,7 @@ func newServeCommand() *cobra.Command {
 				runtime.config.Server.AllowInsecure = true
 			}
 
-			handler := proxy.New(runtime.config, runtime.grok, runtime.log)
+			handler := proxy.New(runtime.config, runtime.grok, runtime.tokens, runtime.log)
 			if err := handler.ValidateListenAddress(); err != nil {
 				return err
 			}

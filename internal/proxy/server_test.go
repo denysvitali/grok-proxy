@@ -188,7 +188,7 @@ func TestResponsesRejectImageInput(t *testing.T) {
 }
 
 func TestNonLoopbackWithoutKeyIsRejected(t *testing.T) {
-	server := New(config.Config{Server: config.ServerConfig{Listen: "0.0.0.0:8080"}}, nil, testLogger())
+	server := New(config.Config{Server: config.ServerConfig{Listen: "0.0.0.0:8080"}}, nil, nil, testLogger())
 	if err := server.ValidateListenAddress(); err == nil {
 		t.Fatal("expected unsafe listener to be rejected")
 	}
@@ -211,7 +211,7 @@ func newTestServerWithConfig(t *testing.T, cfg config.Config, transport roundTri
 	manager := &auth.Manager{Store: store, HTTPClient: &http.Client{Transport: transport}}
 	client := grok.New("https://upstream.example/v1", manager)
 	client.HTTP = &http.Client{Transport: transport}
-	return New(cfg, client, testLogger()).Handler()
+	return New(cfg, client, manager, testLogger()).Handler()
 }
 
 func jsonResponse[T any](status int, value T) *http.Response {
@@ -226,7 +226,7 @@ func testLogger() *logrus.Logger {
 }
 
 func TestHealthDoesNotRequireAuthentication(t *testing.T) {
-	server := New(config.Config{Server: config.ServerConfig{APIKey: "secret"}}, nil, testLogger())
+	server := New(config.Config{Server: config.ServerConfig{APIKey: "secret"}}, nil, nil, testLogger())
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/healthz", nil)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
@@ -235,5 +235,21 @@ func TestHealthDoesNotRequireAuthentication(t *testing.T) {
 	}
 	if recorder.Header().Get("x-request-id") == "" {
 		t.Fatal("health response is missing x-request-id")
+	}
+}
+
+func TestLoginPageDoesNotRequireAPIAuthentication(t *testing.T) {
+	server := New(config.Config{Server: config.ServerConfig{APIKey: "secret"}}, nil, nil, testLogger())
+	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "Sign in with xAI") {
+		t.Fatalf("unexpected login page: %s", recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q", got)
 	}
 }

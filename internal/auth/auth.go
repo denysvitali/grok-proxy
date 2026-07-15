@@ -192,6 +192,12 @@ func (m *Manager) client() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
+// LoginDevice signs in with the default xAI OAuth client and persists the
+// resulting credentials in the manager's store.
+func (m *Manager) LoginDevice(ctx context.Context, announce func(string)) error {
+	return LoginDevice(ctx, m.client(), m.Store, config.Issuer, config.ClientID, config.Scopes, announce)
+}
+
 type Discovery struct {
 	AuthorizationEndpoint       string `json:"authorization_endpoint"`
 	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`

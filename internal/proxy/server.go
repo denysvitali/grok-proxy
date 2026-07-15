@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/denysvitali/grok-proxy/internal/auth"
 	"github.com/denysvitali/grok-proxy/internal/config"
 	"github.com/denysvitali/grok-proxy/internal/grok"
 	"github.com/sirupsen/logrus"
@@ -14,16 +15,19 @@ import (
 type Server struct {
 	config config.Config
 	grok   *grok.Client
+	tokens *auth.Manager
 	log    *logrus.Logger
 }
 
-func New(cfg config.Config, client *grok.Client, logger *logrus.Logger) *Server {
-	return &Server{config: cfg, grok: client, log: logger}
+func New(cfg config.Config, client *grok.Client, tokens *auth.Manager, logger *logrus.Logger) *Server {
+	return &Server{config: cfg, grok: client, tokens: tokens, log: logger}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /login", s.loginPage)
+	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("GET /v1/models", s.authenticate(s.models))
 	mux.HandleFunc("POST /v1/responses", s.authenticate(s.responses))
 	mux.HandleFunc("POST /v1/messages", s.authenticate(s.messages))
