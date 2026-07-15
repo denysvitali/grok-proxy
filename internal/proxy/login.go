@@ -15,11 +15,11 @@ func (s *Server) loginPage(w http.ResponseWriter, _ *http.Request) {
 <main>
   <div class="login-wrap">
     <section class="card login-card">
-      <div class="brand-mark" style="margin-bottom:18px">
+      <div class="brand-mark" style="margin-bottom:14px">
         <div class="logo">G</div>
         <div class="eyebrow">Secure device login</div>
       </div>
-      <h1 style="font-size:clamp(1.9rem,4vw,2.5rem);margin-bottom:10px">Grok Proxy</h1>
+      <h1 class="login-title">Grok Proxy</h1>
       <p class="lede">Sign in with your xAI account. Credentials are stored by this proxy for local Claude Code and Codex traffic.</p>
       <div class="login-steps">
         <div class="step">
@@ -68,11 +68,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 <main>
   <div class="login-wrap">
     <section class="card login-card">
-      <div class="brand-mark" style="margin-bottom:18px">
+      <div class="brand-mark" style="margin-bottom:14px">
         <div class="logo">G</div>
         <div class="eyebrow">Waiting for authorization</div>
       </div>
-      <h1 style="font-size:clamp(1.9rem,4vw,2.5rem);margin-bottom:10px">Sign in with xAI</h1>
+      <h1 class="login-title">Sign in with xAI</h1>
       <p class="lede">Keep this page open while device authorization completes.</p>
       <div class="stream-log">`)
 	if canFlush {

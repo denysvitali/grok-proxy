@@ -220,7 +220,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Grok Proxy</title>
   <style>{{.Styles}}</style>
 </head>
