@@ -17,21 +17,23 @@ import (
 )
 
 const (
-	accountsURL = "https://accounts.x.ai/user?include=subscription"
-	billingURL  = "https://grok.com/billing?format=credits"
+	accountPath = "/user?include=subscription"
+	billingPath = "/billing?format=credits"
 )
 
 type DashboardClient struct {
-	AccountsURL string
-	BillingURL  string
-	HTTP        *http.Client
+	BaseURL string
+	HTTP    *http.Client
 }
 
-func NewDashboardClient(client *http.Client) *DashboardClient {
+func NewDashboardClient(baseURL string, client *http.Client) *DashboardClient {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &DashboardClient{AccountsURL: accountsURL, BillingURL: billingURL, HTTP: client}
+	if baseURL == "" {
+		baseURL = config.APIBase
+	}
+	return &DashboardClient{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: client}
 }
 
 type Account struct {
@@ -71,47 +73,47 @@ func (n Number) String() string {
 	return strconv.FormatFloat(n.Value, 'f', -1, 64)
 }
 
-type BillingPeriod struct {
-	End              string
-	Month            string
-	BillingCycle     string
-	IncludedUsed     Number
-	TotalUsed        Number
-	OnDemandEnabled  *bool
-	SubscriptionTier string
+type UsagePeriod struct {
+	Type  string
+	Start string
+	End   string
 }
 
 type Billing struct {
-	End                  string
-	Month                string
 	CreditUsagePercent   Number
-	CurrentPeriod        BillingPeriod
+	CurrentPeriod        UsagePeriod
 	MonthlyLimit         Number
+	Used                 Number
 	OnDemandCap          Number
 	OnDemandUsed         Number
 	PrepaidBalance       Number
 	IsUnifiedBillingUser *bool
 	BillingPeriodStart   string
+	BillingPeriodEnd     string
+	OnDemandEnabled      *bool
 	SubscriptionTier     string
 }
 
 func (c *DashboardClient) Account(ctx context.Context, accessToken string) (Account, error) {
-	body, err := c.get(ctx, c.AccountsURL, "cli", false, accessToken)
+	body, err := c.get(ctx, c.BaseURL+accountPath, accessToken, "")
 	if err != nil {
 		return Account{}, err
 	}
 	return decodeAccount(body)
 }
 
-func (c *DashboardClient) Billing(ctx context.Context, accessToken string) (Billing, error) {
-	body, err := c.get(ctx, c.BillingURL, "billing", true, accessToken)
+func (c *DashboardClient) Billing(ctx context.Context, accessToken, userID string) (Billing, error) {
+	if userID == "" {
+		return Billing{}, errors.New("billing request requires a user ID")
+	}
+	body, err := c.get(ctx, c.BaseURL+billingPath, accessToken, userID)
 	if err != nil {
 		return Billing{}, err
 	}
 	return decodeBilling(body)
 }
 
-func (c *DashboardClient) get(ctx context.Context, endpoint, mode string, includeVersion bool, accessToken string) ([]byte, error) {
+func (c *DashboardClient) get(ctx context.Context, endpoint, accessToken, userID string) ([]byte, error) {
 	if accessToken == "" {
 		return nil, errors.New("missing access token")
 	}
@@ -121,10 +123,11 @@ func (c *DashboardClient) get(ctx context.Context, endpoint, mode string, includ
 	}
 	request.Header.Set("Authorization", "Bearer "+accessToken)
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("x-grok-client-mode", mode)
-	if includeVersion {
-		request.Header.Set("x-grok-client-version", config.ClientVersion)
-		request.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+	request.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+	request.Header.Set("x-grok-client-version", config.ClientVersion)
+	request.Header.Set("x-grok-client-mode", "interactive")
+	if userID != "" {
+		request.Header.Set("x-userid", userID)
 	}
 	response, err := c.HTTP.Do(request)
 	if err != nil {
@@ -204,29 +207,30 @@ func decodeBilling(body []byte) (Billing, error) {
 	if err != nil {
 		return Billing{}, fmt.Errorf("decode billing data: %w", err)
 	}
-	data := unwrap(root, "data", "billing", "credits")
+	response := unwrap(root, "data", "billing", "credits")
+	data, ok := objectValue(response, "config")
+	if !ok {
+		data = response
+	}
 	period, _ := objectValue(data, "currentPeriod", "current_period")
-	current := BillingPeriod{
-		End:              stringValue(period, "end"),
-		Month:            stringValue(period, "month"),
-		BillingCycle:     stringValue(period, "billingCycle", "billing_cycle"),
-		IncludedUsed:     numberValue(period, "includedUsed", "included_used"),
-		TotalUsed:        numberValue(period, "totalUsed", "total_used"),
-		OnDemandEnabled:  boolValue(period, "onDemandEnabled", "on_demand_enabled"),
-		SubscriptionTier: stringValue(period, "subscriptionTier", "subscription_tier"),
+	current := UsagePeriod{
+		Type:  stringValue(period, "type"),
+		Start: stringValue(period, "start"),
+		End:   stringValue(period, "end"),
 	}
 	return Billing{
-		End:                  firstNonEmpty(stringValue(data, "end"), current.End),
-		Month:                firstNonEmpty(stringValue(data, "month"), current.Month),
 		CreditUsagePercent:   numberValue(data, "creditUsagePercent", "credit_usage_percent"),
 		CurrentPeriod:        current,
 		MonthlyLimit:         numberValue(data, "monthlyLimit", "monthly_limit"),
+		Used:                 numberValue(data, "used"),
 		OnDemandCap:          numberValue(data, "onDemandCap", "on_demand_cap"),
 		OnDemandUsed:         numberValue(data, "onDemandUsed", "on_demand_used"),
 		PrepaidBalance:       numberValue(data, "prepaidBalance", "prepaid_balance"),
 		IsUnifiedBillingUser: boolValue(data, "isUnifiedBillingUser", "is_unified_billing_user"),
 		BillingPeriodStart:   stringValue(data, "billingPeriodStart", "billing_period_start"),
-		SubscriptionTier:     firstNonEmpty(stringValue(data, "subscriptionTier", "subscription_tier"), current.SubscriptionTier),
+		BillingPeriodEnd:     stringValue(data, "billingPeriodEnd", "billing_period_end"),
+		OnDemandEnabled:      boolValue(response, "onDemandEnabled", "on_demand_enabled"),
+		SubscriptionTier:     firstNonEmpty(stringValue(response, "subscriptionTier", "subscription_tier"), stringValue(data, "subscriptionTier", "subscription_tier")),
 	}, nil
 }
 
@@ -318,6 +322,8 @@ func numberValue(object map[string]any, names ...string) Number {
 		number = typed
 	case string:
 		number, err = strconv.ParseFloat(typed, 64)
+	case map[string]any:
+		return numberValue(typed, "val")
 	default:
 		return Number{}
 	}

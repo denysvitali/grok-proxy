@@ -5,10 +5,10 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/denysvitali/grok-proxy/internal/grok"
@@ -54,23 +54,7 @@ func (s *Server) dashboard(w http.ResponseWriter, request *http.Request) {
 
 	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 	defer cancel()
-	var (
-		account    grok.Account
-		billing    grok.Billing
-		accountErr error
-		billingErr error
-		group      sync.WaitGroup
-	)
-	group.Add(2)
-	go func() {
-		defer group.Done()
-		account, accountErr = s.dashboardClient.Account(ctx, token.AccessToken)
-	}()
-	go func() {
-		defer group.Done()
-		billing, billingErr = s.dashboardClient.Billing(ctx, token.AccessToken)
-	}()
-	group.Wait()
+	account, accountErr := s.dashboardClient.Account(ctx, token.AccessToken)
 
 	if accountErr != nil {
 		s.log.WithError(accountErr).Warn("dashboard account request failed")
@@ -84,6 +68,7 @@ func (s *Server) dashboard(w http.ResponseWriter, request *http.Request) {
 	} else {
 		page.AccountName, page.AccountRows = accountView(account)
 	}
+	billing, billingErr := s.dashboardClient.Billing(ctx, token.AccessToken, account.UserID)
 	if billingErr != nil {
 		page.UsageError = "Usage information is temporarily unavailable."
 		s.log.WithError(billingErr).Warn("dashboard billing request failed")
@@ -159,17 +144,16 @@ func usageView(billing grok.Billing) dashboardUsage {
 		view.PercentValue = strconv.FormatFloat(max(0, min(100, percent)), 'f', 2, 64)
 	}
 	addRow(&view.Rows, "Subscription", billing.SubscriptionTier)
-	addRow(&view.Rows, "Period", firstDisplay(billing.CurrentPeriod.BillingCycle, billing.Month, ""))
-	addRow(&view.Rows, "Period start", firstDisplay(billing.BillingPeriodStart, ""))
-	addRow(&view.Rows, "Period end", firstDisplay(billing.End, billing.CurrentPeriod.End, ""))
-	addNumberRow(&view.Rows, "Included used", billing.CurrentPeriod.IncludedUsed)
-	addNumberRow(&view.Rows, "Total used", billing.CurrentPeriod.TotalUsed)
-	addNumberRow(&view.Rows, "Included limit", billing.MonthlyLimit)
-	addNumberRow(&view.Rows, "Extra usage used", billing.OnDemandUsed)
-	addNumberRow(&view.Rows, "Extra usage cap", billing.OnDemandCap)
-	addNumberRow(&view.Rows, "Prepaid balance", billing.PrepaidBalance)
-	if billing.CurrentPeriod.OnDemandEnabled != nil {
-		addRow(&view.Rows, "Extra usage", enabledDisabled(*billing.CurrentPeriod.OnDemandEnabled))
+	addRow(&view.Rows, "Period", strings.TrimPrefix(billing.CurrentPeriod.Type, "USAGE_PERIOD_TYPE_"))
+	addRow(&view.Rows, "Period start", firstDisplay(billing.CurrentPeriod.Start, billing.BillingPeriodStart))
+	addRow(&view.Rows, "Period end", firstDisplay(billing.CurrentPeriod.End, billing.BillingPeriodEnd))
+	addCentRow(&view.Rows, "Included used", billing.Used)
+	addCentRow(&view.Rows, "Included limit", billing.MonthlyLimit)
+	addCentRow(&view.Rows, "Extra usage used", billing.OnDemandUsed)
+	addCentRow(&view.Rows, "Extra usage cap", billing.OnDemandCap)
+	addCentRow(&view.Rows, "Prepaid balance", billing.PrepaidBalance)
+	if billing.OnDemandEnabled != nil {
+		addRow(&view.Rows, "Extra usage", enabledDisabled(*billing.OnDemandEnabled))
 	}
 	if billing.IsUnifiedBillingUser != nil {
 		addRow(&view.Rows, "Unified billing", yesNo(*billing.IsUnifiedBillingUser))
@@ -183,9 +167,9 @@ func addRow(rows *[]dashboardRow, label, value string) {
 	}
 }
 
-func addNumberRow(rows *[]dashboardRow, label string, value grok.Number) {
+func addCentRow(rows *[]dashboardRow, label string, value grok.Number) {
 	if value.Valid {
-		addRow(rows, label, value.String()+" credits")
+		addRow(rows, label, fmt.Sprintf("$%.2f", math.Abs(value.Value)/100))
 	}
 }
 

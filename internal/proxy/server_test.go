@@ -281,42 +281,46 @@ func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
 		if got := request.Header.Get("Authorization"); got != "Bearer subscription-token" {
 			t.Errorf("Authorization = %q", got)
 		}
-		switch request.URL.Host {
-		case "accounts.x.ai":
-			if request.URL.Path != "/user" || request.URL.Query().Get("include") != "subscription" {
+		if request.URL.Host != "upstream.example" {
+			t.Errorf("dashboard host = %q", request.URL.Host)
+		}
+		if got := request.Header.Get("x-grok-client-mode"); got != "interactive" {
+			t.Errorf("client mode = %q", got)
+		}
+		if got := request.Header.Get("x-grok-client-version"); got != config.ClientVersion {
+			t.Errorf("client version = %q", got)
+		}
+		if got := request.Header.Get("X-XAI-Token-Auth"); got != "xai-grok-cli" {
+			t.Errorf("token-auth header = %q", got)
+		}
+		switch request.URL.Path {
+		case "/v1/user":
+			if request.URL.Query().Get("include") != "subscription" {
 				t.Errorf("account URL = %s", request.URL)
 			}
-			if got := request.Header.Get("x-grok-client-mode"); got != "cli" {
-				t.Errorf("account mode = %q", got)
-			}
-			if got := request.Header.Get("x-grok-client-version"); got != "" {
-				t.Errorf("account client version = %q", got)
-			}
-			if got := request.Header.Get("X-XAI-Token-Auth"); got != "" {
-				t.Errorf("account token-auth header = %q", got)
+			if got := request.Header.Get("x-userid"); got != "" {
+				t.Errorf("account user ID = %q", got)
 			}
 			return jsonResponse(http.StatusOK, map[string]any{
 				"userId": "user-123", "firstName": "Ada", "lastName": "Lovelace",
-				"teamName": "Analytical Engines", "subscription": map[string]any{"tier": "SuperGrok"},
+				"teamName": "Analytical Engines", "subscriptionTier": "SuperGrok",
 				"hasGrokCodeAccess": true, "codingDataRetentionOptOut": true,
 			}), nil
-		case "grok.com":
-			if request.URL.Path != "/billing" || request.URL.Query().Get("format") != "credits" {
+		case "/v1/billing":
+			if request.URL.Query().Get("format") != "credits" {
 				t.Errorf("billing URL = %s", request.URL)
 			}
-			if got := request.Header.Get("x-grok-client-mode"); got != "billing" {
-				t.Errorf("billing mode = %q", got)
-			}
-			if got := request.Header.Get("x-grok-client-version"); got != config.ClientVersion {
-				t.Errorf("billing client version = %q", got)
-			}
-			if got := request.Header.Get("X-XAI-Token-Auth"); got != "xai-grok-cli" {
-				t.Errorf("billing token-auth header = %q", got)
+			if got := request.Header.Get("x-userid"); got != "user-123" {
+				t.Errorf("billing user ID = %q", got)
 			}
 			return jsonResponse(http.StatusOK, map[string]any{
-				"creditUsagePercent": 42.5, "monthlyLimit": 1000, "onDemandUsed": 12,
-				"prepaidBalance": 25, "subscriptionTier": "SuperGrok",
-				"currentPeriod": map[string]any{"billingCycle": "weekly", "includedUsed": 425, "end": "2026-07-20"},
+				"config": map[string]any{
+					"creditUsagePercent": 42.5, "monthlyLimit": map[string]any{"val": 1000},
+					"used": map[string]any{"val": 425}, "onDemandUsed": map[string]any{"val": -12},
+					"prepaidBalance": map[string]any{"val": 25},
+					"currentPeriod":  map[string]any{"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-07-13", "end": "2026-07-20"},
+				},
+				"onDemandEnabled": true, "subscriptionTier": "SuperGrok",
 			}), nil
 		default:
 			t.Fatalf("unexpected dashboard request: %s", request.URL)
@@ -331,7 +335,7 @@ func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 	page := recorder.Body.String()
-	for _, expected := range []string{"Ada Lovelace", "SuperGrok", "42.5%", "425 credits", "grok-4.5", "Opted out"} {
+	for _, expected := range []string{"Ada Lovelace", "SuperGrok", "42.5%", "$4.25", "$0.12", "WEEKLY", "grok-4.5", "Opted out"} {
 		if !strings.Contains(page, expected) {
 			t.Errorf("dashboard missing %q: %s", expected, page)
 		}
@@ -349,10 +353,10 @@ func TestDashboardFallsBackToOAuthClaimsWhenAccountEnrichmentFails(t *testing.T)
 		t.Fatal(err)
 	}
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.Host == "accounts.x.ai" {
+		if request.URL.Path == "/v1/user" {
 			return jsonResponse(http.StatusForbidden, map[string]any{"error": "forbidden"}), nil
 		}
-		return jsonResponse(http.StatusOK, map[string]any{"creditUsagePercent": 10}), nil
+		return jsonResponse(http.StatusOK, map[string]any{"config": map[string]any{"creditUsagePercent": 10}}), nil
 	})
 	manager := &auth.Manager{Store: store, HTTPClient: &http.Client{Transport: transport}}
 	server := New(config.Config{}, nil, manager, testLogger())

@@ -25,7 +25,7 @@ func New(cfg config.Config, client *grok.Client, tokens *auth.Manager, logger *l
 	if tokens != nil {
 		httpClient = tokens.HTTPClient
 	}
-	return &Server{config: cfg, grok: client, tokens: tokens, dashboardClient: grok.NewDashboardClient(httpClient), log: logger}
+	return &Server{config: cfg, grok: client, tokens: tokens, dashboardClient: grok.NewDashboardClient(cfg.BaseURL, httpClient), log: logger}
 }
 
 func (s *Server) Handler() http.Handler {
