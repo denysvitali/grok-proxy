@@ -292,7 +292,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype
   const copyClaudeCommand = document.getElementById("copy-claude-command");
   const copyStatus = document.getElementById("copy-status");
   function updateClaudeCommand() {
-    claudeCommand.value = "ANTHROPIC_BASE_URL=" + window.location.protocol + "//" + proxyHost.value.trim() + " \\\n+ANTHROPIC_AUTH_TOKEN=local \\\n+claude";
+    claudeCommand.value = "ANTHROPIC_BASE_URL=" + window.location.protocol + "//" + proxyHost.value.trim() + " \\\nANTHROPIC_AUTH_TOKEN=local \\\nclaude";
   }
   proxyHost.addEventListener("input", updateClaudeCommand);
   copyClaudeCommand.addEventListener("click", async () => {
