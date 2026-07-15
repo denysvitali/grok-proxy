@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 
 	"github.com/denysvitali/grok-proxy/internal/auth"
 	"github.com/denysvitali/grok-proxy/internal/config"
@@ -32,6 +33,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.authenticate(s.dashboard))
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /readyz", s.ready)
+	mux.Handle("GET /metrics", metricsHandler())
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("GET /v1/models", s.authenticate(s.models))
@@ -60,4 +63,14 @@ type healthResponse struct {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
+}
+
+func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
+	if s.tokens != nil && s.tokens.Store != nil && s.tokens.Store.Path != "" {
+		if _, err := os.Stat(s.tokens.Store.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			writeJSON(w, http.StatusServiceUnavailable, healthResponse{Status: "auth_store_unavailable"})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, healthResponse{Status: "ready"})
 }

@@ -41,13 +41,50 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		started := time.Now()
 		response := &loggingResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(response, request)
-		s.log.WithFields(logrus.Fields{
+
+		duration := time.Since(started)
+		route := routeLabel(request.URL.Path)
+		protocol := protocolLabel(request.URL.Path)
+		observeRequest(request.Method, route, protocol, response.status, duration)
+
+		if isQuietPath(request.URL.Path) && response.status < 400 {
+			return
+		}
+
+		fields := logrus.Fields{
 			"method":      request.Method,
 			"path":        request.URL.Path,
+			"route":       route,
+			"protocol":    protocol,
 			"status":      response.status,
 			"request_id":  response.Header().Get("x-request-id"),
-			"duration_ms": time.Since(started).Milliseconds(),
-		}).Info("request")
+			"duration_ms": duration.Milliseconds(),
+		}
+		if response.errorType != "" {
+			fields["error_type"] = response.errorType
+		}
+		if response.errorMessage != "" {
+			fields["error"] = truncateLogValue(response.errorMessage, 240)
+		}
+		if model := response.Header().Get("x-grok-proxy-model"); model != "" {
+			fields["model"] = model
+		}
+		if stream := response.Header().Get("x-grok-proxy-stream"); stream != "" {
+			fields["stream"] = stream == "true"
+		}
+		if agent := request.Header.Get("User-Agent"); agent != "" {
+			fields["user_agent"] = truncateLogValue(agent, 120)
+		}
+
+		entry := s.log.WithFields(fields)
+		switch {
+		case response.status >= 500:
+			entry.Error("request")
+		case response.status >= 400:
+			entry.Warn("request")
+		default:
+			entry.Info("request")
+		}
 	})
 }
 
@@ -76,8 +113,10 @@ func (s *Server) recoverPanics(next http.Handler) http.Handler {
 
 type loggingResponseWriter struct {
 	http.ResponseWriter
-	status      int
-	wroteHeader bool
+	status       int
+	wroteHeader  bool
+	errorType    string
+	errorMessage string
 }
 
 func (w *loggingResponseWriter) WriteHeader(status int) {
@@ -103,6 +142,44 @@ func (w *loggingResponseWriter) Flush() {
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+func (w *loggingResponseWriter) noteError(errorType, message string) {
+	if errorType != "" {
+		w.errorType = errorType
+	}
+	if message != "" {
+		w.errorMessage = message
+	}
+}
+
+func noteResponseError(w http.ResponseWriter, errorType, message string) {
+	if recorder, ok := w.(*loggingResponseWriter); ok {
+		recorder.noteError(errorType, message)
+	}
+}
+
+func setProxyRequestMeta(w http.ResponseWriter, model string, stream bool) {
+	if model != "" {
+		w.Header().Set("x-grok-proxy-model", model)
+	}
+	if stream {
+		w.Header().Set("x-grok-proxy-stream", "true")
+	} else {
+		w.Header().Set("x-grok-proxy-stream", "false")
+	}
+}
+
+func isQuietPath(path string) bool {
+	return path == "/healthz" || path == "/readyz" || path == "/metrics"
+}
+
+func truncateLogValue(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "…"
 }
 
 func newRequestID() string {

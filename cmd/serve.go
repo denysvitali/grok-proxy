@@ -55,6 +55,7 @@ func newServeCommand() *cobra.Command {
 				"listen":      runtime.config.Server.Listen,
 				"model":       runtime.config.Proxy.DefaultModel,
 				"client_auth": runtime.config.Server.APIKey != "",
+				"log_format":  runtime.config.LogFormat,
 			}).Info("Grok proxy listening")
 			err = server.ListenAndServe()
 			if errors.Is(err, http.ErrServerClosed) {

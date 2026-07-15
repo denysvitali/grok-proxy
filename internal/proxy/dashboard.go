@@ -58,7 +58,8 @@ func (s *Server) dashboard(w http.ResponseWriter, request *http.Request) {
 	account, accountErr := s.dashboardClient.Account(ctx, token.AccessToken)
 
 	if accountErr != nil {
-		s.log.WithError(accountErr).Warn("dashboard account request failed")
+		observeDashboardFailure("account")
+		s.log.WithError(accountErr).WithField("component", "account").Warn("dashboard upstream request failed")
 		account, accountErr = grok.AccountFromToken(token.AccessToken)
 		if accountErr != nil {
 			page.AccountError = "Account information is temporarily unavailable."
@@ -72,7 +73,8 @@ func (s *Server) dashboard(w http.ResponseWriter, request *http.Request) {
 	billing, billingErr := s.dashboardClient.Billing(ctx, token.AccessToken, account.UserID)
 	if billingErr != nil {
 		page.UsageError = "Usage information is temporarily unavailable."
-		s.log.WithError(billingErr).Warn("dashboard billing request failed")
+		observeDashboardFailure("billing")
+		s.log.WithError(billingErr).WithField("component", "billing").Warn("dashboard upstream request failed")
 	} else if !billing.Available {
 		page.UsageError = "No billing data is available for this account."
 	} else {

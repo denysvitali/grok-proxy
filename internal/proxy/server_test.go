@@ -239,6 +239,74 @@ func TestHealthDoesNotRequireAuthentication(t *testing.T) {
 	}
 }
 
+func TestReadyzAndMetricsDoNotRequireAuthentication(t *testing.T) {
+	server := New(config.Config{Server: config.ServerConfig{APIKey: "secret"}}, nil, nil, testLogger())
+	for _, path := range []string{"/readyz", "/metrics"} {
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status = %d body = %s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+	metricsBody := httptest.NewRecorder()
+	server.Handler().ServeHTTP(metricsBody, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(metricsBody.Body.String(), "grok_proxy_http_requests_total") {
+		t.Fatalf("metrics missing request counter: %s", metricsBody.Body.String())
+	}
+}
+
+func TestRequestLogsCaptureClientErrorsAndSkipProbeNoise(t *testing.T) {
+	logger := logrus.New()
+	var logs bytes.Buffer
+	logger.SetOutput(&logs)
+	logger.SetLevel(logrus.InfoLevel)
+	logger.SetFormatter(&logrus.JSONFormatter{})
+
+	store := &auth.Store{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(&auth.Token{AccessToken: "subscription-token", ExpiresAt: float64(time.Now().Add(time.Hour).Unix())}); err != nil {
+		t.Fatal(err)
+	}
+	manager := &auth.Manager{Store: store, HTTPClient: &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		t.Fatal("unsupported request reached upstream")
+		return nil, nil
+	})}}
+	client := grok.New("https://upstream.example/v1", manager)
+	client.HTTP = &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		t.Fatal("unsupported request reached upstream")
+		return nil, nil
+	})}
+	handler := New(config.Config{
+		Server: config.ServerConfig{Listen: "127.0.0.1:8080", MaxBodyBytes: 1 << 20},
+		Proxy:  config.ProxyConfig{DefaultModel: "grok-4.5", ModelMap: map[string]string{}},
+	}, client, manager, logger).Handler()
+
+	probe := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	probeRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(probeRecorder, probe)
+	if probeRecorder.Code != http.StatusOK {
+		t.Fatalf("health status = %d", probeRecorder.Code)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("expected quiet healthz logs, got %s", logs.String())
+	}
+
+	body := `{"model":"grok-4.5","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://example.test/image.png"}]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	request.Header.Set("User-Agent", "test-agent/1.0")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", recorder.Code, recorder.Body.String())
+	}
+	logLine := logs.String()
+	for _, expected := range []string{`"level":"warning"`, `"error_type":"invalid_request_error"`, `"path":"/v1/responses"`, `"model":"grok-4.5"`, `"protocol":"openai"`} {
+		if !strings.Contains(logLine, expected) {
+			t.Fatalf("log missing %s: %s", expected, logLine)
+		}
+	}
+}
+
 func TestLoginPageDoesNotRequireAPIAuthentication(t *testing.T) {
 	server := New(config.Config{Server: config.ServerConfig{APIKey: "secret"}}, nil, nil, testLogger())
 	request := httptest.NewRequest(http.MethodGet, "/login", nil)

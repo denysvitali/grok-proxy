@@ -140,9 +140,20 @@ func (c *DashboardClient) get(ctx context.Context, endpoint, accessToken, userID
 		return nil, fmt.Errorf("read account service response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("account service returned HTTP %d", response.StatusCode)
+		return nil, fmt.Errorf("account service returned HTTP %d content-type=%q body=%q", response.StatusCode, response.Header.Get("Content-Type"), truncateBodyPreview(body, 160))
+	}
+	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("<")) {
+		return nil, fmt.Errorf("account service returned HTML instead of JSON content-type=%q body=%q", response.Header.Get("Content-Type"), truncateBodyPreview(body, 160))
 	}
 	return body, nil
+}
+
+func truncateBodyPreview(body []byte, limit int) string {
+	text := strings.Join(strings.Fields(string(body)), " ")
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "…"
 }
 
 // AccountFromToken recovers the basic identity claims that Grok extracts from

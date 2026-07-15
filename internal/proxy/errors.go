@@ -15,10 +15,12 @@ func writeJSON[T any](w http.ResponseWriter, status int, value T) {
 }
 
 func writeOpenAIError(w http.ResponseWriter, status int, errorType, message string) {
+	noteResponseError(w, errorType, message)
 	writeJSON(w, status, openai.ErrorResponse{Error: openai.ErrorBody{Type: errorType, Message: message}})
 }
 
 func writeAnthropicError(w http.ResponseWriter, status int, errorType, message string) {
+	noteResponseError(w, errorType, message)
 	writeJSON(w, status, anthropic.ErrorResponse{
 		Type:  "error",
 		Error: anthropic.ErrorBody{Type: errorType, Message: message},

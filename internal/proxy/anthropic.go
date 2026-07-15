@@ -18,6 +18,7 @@ func (s *Server) messages(w http.ResponseWriter, request *http.Request) {
 	}
 
 	resolvedModel := s.config.ResolveModel(input.Model)
+	setProxyRequestMeta(w, resolvedModel, input.Stream)
 	upstreamRequest, err := adapter.AnthropicRequest(input, resolvedModel)
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())

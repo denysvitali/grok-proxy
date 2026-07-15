@@ -20,13 +20,14 @@ func (s *Server) responses(w http.ResponseWriter, request *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return
 	}
+
+	requestedModel := input.Model
+	resolvedModel := s.config.ResolveModel(requestedModel)
+	setProxyRequestMeta(w, resolvedModel, input.Stream)
 	if err := validateOpenAIInput(input.Input); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-
-	requestedModel := input.Model
-	resolvedModel := s.config.ResolveModel(requestedModel)
 	input.Model = resolvedModel
 	body, err := json.Marshal(input)
 	if err != nil {
