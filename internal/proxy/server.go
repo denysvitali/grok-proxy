@@ -13,18 +13,24 @@ import (
 )
 
 type Server struct {
-	config config.Config
-	grok   *grok.Client
-	tokens *auth.Manager
-	log    *logrus.Logger
+	config          config.Config
+	grok            *grok.Client
+	tokens          *auth.Manager
+	dashboardClient *grok.DashboardClient
+	log             *logrus.Logger
 }
 
 func New(cfg config.Config, client *grok.Client, tokens *auth.Manager, logger *logrus.Logger) *Server {
-	return &Server{config: cfg, grok: client, tokens: tokens, log: logger}
+	var httpClient *http.Client
+	if tokens != nil {
+		httpClient = tokens.HTTPClient
+	}
+	return &Server{config: cfg, grok: client, tokens: tokens, dashboardClient: grok.NewDashboardClient(httpClient), log: logger}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", s.authenticate(s.dashboard))
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)

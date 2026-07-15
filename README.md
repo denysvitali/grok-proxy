@@ -59,6 +59,7 @@ grok-proxy serve
 
 The default listener is `127.0.0.1:8080`. The server exposes:
 
+- `GET /` for account, subscription, usage, and proxy status
 - `GET /login` for interactive xAI login from a browser
 - `POST /v1/responses` for Codex and other Responses API clients
 - `POST /v1/messages` for Claude Code and Anthropic Messages clients
@@ -69,7 +70,8 @@ The default listener is `127.0.0.1:8080`. The server exposes:
 When running the proxy on a remote host, open `/login` in a browser and select
 **Sign in with xAI**. The page uses xAI device authorization and stores the
 result in the configured `auth_file`; keep the page open until it reports that
-login succeeded.
+login succeeded. Return to `/` to view account and usage information fetched
+from the same account services as Grok Build.
 
 The first release supports text, system/developer instructions, function
 tools, tool results, reasoning settings, usage, and SSE streaming. Image,

@@ -253,3 +253,83 @@ func TestLoginPageDoesNotRequireAPIAuthentication(t *testing.T) {
 		t.Fatalf("Cache-Control = %q", got)
 	}
 }
+
+func TestDashboardPromptsForLoginWithoutCredentials(t *testing.T) {
+	manager := &auth.Manager{Store: &auth.Store{Path: filepath.Join(t.TempDir(), "auth.json")}}
+	server := New(config.Config{}, nil, manager, testLogger())
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "Sign in to view your usage") {
+		t.Fatalf("unexpected dashboard: %s", recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+}
+
+func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
+	handler := newTestServerWithConfig(t, config.Config{
+		BaseURL: "https://upstream.example/v1",
+		Server:  config.ServerConfig{Listen: "127.0.0.1:8080", MaxBodyBytes: 1 << 20},
+		Proxy:   config.ProxyConfig{DefaultModel: "grok-4.5", ModelMap: map[string]string{}},
+	}, func(request *http.Request) (*http.Response, error) {
+		if got := request.Header.Get("Authorization"); got != "Bearer subscription-token" {
+			t.Errorf("Authorization = %q", got)
+		}
+		if got := request.Header.Get("X-XAI-Token-Auth"); got != "xai-grok-cli" {
+			t.Errorf("X-XAI-Token-Auth = %q", got)
+		}
+		if got := request.Header.Get("x-grok-client-version"); got != config.ClientVersion {
+			t.Errorf("x-grok-client-version = %q", got)
+		}
+		switch request.URL.Host {
+		case "accounts.x.ai":
+			if request.URL.Path != "/user" || request.URL.Query().Get("include") != "subscription" {
+				t.Errorf("account URL = %s", request.URL)
+			}
+			if got := request.Header.Get("x-grok-client-mode"); got != "cli" {
+				t.Errorf("account mode = %q", got)
+			}
+			return jsonResponse(http.StatusOK, map[string]any{
+				"userId": "user-123", "firstName": "Ada", "lastName": "Lovelace",
+				"teamName": "Analytical Engines", "subscription": map[string]any{"tier": "SuperGrok"},
+				"hasGrokCodeAccess": true, "codingDataRetentionOptOut": true,
+			}), nil
+		case "grok.com":
+			if request.URL.Path != "/billing" || request.URL.Query().Get("format") != "credits" {
+				t.Errorf("billing URL = %s", request.URL)
+			}
+			if got := request.Header.Get("x-grok-client-mode"); got != "billing" {
+				t.Errorf("billing mode = %q", got)
+			}
+			return jsonResponse(http.StatusOK, map[string]any{
+				"creditUsagePercent": 42.5, "monthlyLimit": 1000, "onDemandUsed": 12,
+				"prepaidBalance": 25, "subscriptionTier": "SuperGrok",
+				"currentPeriod": map[string]any{"billingCycle": "weekly", "includedUsed": 425, "end": "2026-07-20"},
+			}), nil
+		default:
+			t.Fatalf("unexpected dashboard request: %s", request.URL)
+			return nil, nil
+		}
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	page := recorder.Body.String()
+	for _, expected := range []string{"Ada Lovelace", "SuperGrok", "42.5%", "425 credits", "grok-4.5", "Opted out"} {
+		if !strings.Contains(page, expected) {
+			t.Errorf("dashboard missing %q: %s", expected, page)
+		}
+	}
+	if strings.Contains(page, "subscription-token") {
+		t.Fatal("dashboard exposed the access token")
+	}
+}

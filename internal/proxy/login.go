@@ -36,7 +36,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				_, _ = fmt.Fprintf(w, `<p>Login failed: %s</p><p><a href="/login">Try again</a></p>`, html.EscapeString(err.Error()))
 			} else {
-				_, _ = fmt.Fprint(w, `<p>Login successful. You can close this page.</p>`)
+				_, _ = fmt.Fprint(w, `<p>Login successful.</p><p><a href="/">Open dashboard</a></p>`)
 			}
 			_, _ = fmt.Fprint(w, `</main></body></html>`)
 			return
