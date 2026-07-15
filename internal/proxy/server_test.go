@@ -277,6 +277,9 @@ func TestDashboardPromptsForLoginWithoutCredentials(t *testing.T) {
 			t.Errorf("dashboard missing %q: %s", expected, page)
 		}
 	}
+	if strings.Contains(page, "\\n+ANTHROPIC_AUTH_TOKEN") {
+		t.Fatalf("Claude Code command contains an unexpected plus sign: %s", page)
+	}
 	if got := recorder.Header().Get("Content-Security-Policy"); !strings.Contains(got, "script-src 'unsafe-inline'") {
 		t.Errorf("Content-Security-Policy = %q", got)
 	}
