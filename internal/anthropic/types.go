@@ -47,6 +47,17 @@ type ContentBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	Source    *ImageSource    `json:"source,omitempty"`
+}
+
+// ImageSource is an Anthropic image content block source.
+// Base64 form: type=base64, media_type, data.
+// URL form: type=url, url.
+type ImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 type MessagesResponse struct {

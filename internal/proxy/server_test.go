@@ -174,17 +174,72 @@ func TestAPIKeyIsRequiredWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestResponsesRejectImageInput(t *testing.T) {
-	handler := newTestServer(t, func(_ *http.Request) (*http.Response, error) {
-		t.Fatal("unsupported request reached upstream")
-		return nil, nil
+func TestResponsesAcceptsImageInput(t *testing.T) {
+	var upstreamBody []byte
+	handler := newTestServer(t, func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		upstreamBody = body
+		return jsonResponse(http.StatusOK, openai.Response{
+			ID:     "resp_img",
+			Output: []openai.OutputItem{{Type: "message", Content: []openai.OutputContent{{Type: "output_text", Text: "ok"}}}},
+			Usage:  openai.Usage{InputTokens: 1, OutputTokens: 1},
+		}), nil
 	})
 	body := `{"model":"grok-4.5","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://example.test/image.png"}]}]}`
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(string(upstreamBody), `"type":"input_image"`) || !strings.Contains(string(upstreamBody), "https://example.test/image.png") {
+		t.Fatalf("upstream body missing image: %s", upstreamBody)
+	}
+}
+
+func TestResponsesRejectsAudioInput(t *testing.T) {
+	handler := newTestServer(t, func(_ *http.Request) (*http.Response, error) {
+		t.Fatal("unsupported request reached upstream")
+		return nil, nil
+	})
+	body := `{"model":"grok-4.5","input":[{"type":"message","role":"user","content":[{"type":"input_audio","audio_url":"https://example.test/a.wav"}]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestMessagesAcceptsAnthropicImage(t *testing.T) {
+	var upstreamBody []byte
+	handler := newTestServer(t, func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		upstreamBody = body
+		return jsonResponse(http.StatusOK, openai.Response{
+			ID:     "resp_img",
+			Output: []openai.OutputItem{{Type: "message", Content: []openai.OutputContent{{Type: "output_text", Text: "cat"}}}},
+			Usage:  openai.Usage{InputTokens: 2, OutputTokens: 1},
+		}), nil
+	})
+	body := `{"model":"claude-sonnet","max_tokens":64,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}},{"type":"text","text":"what?"}]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(string(upstreamBody), `"type":"input_image"`) || !strings.Contains(string(upstreamBody), "data:image/png;base64,abc") {
+		t.Fatalf("upstream body missing translated image: %s", upstreamBody)
+	}
+	if !strings.Contains(recorder.Body.String(), `"type":"text"`) || !strings.Contains(recorder.Body.String(), "cat") {
+		t.Fatalf("unexpected anthropic response: %s", recorder.Body.String())
 	}
 }
 
@@ -291,7 +346,7 @@ func TestRequestLogsCaptureClientErrorsAndSkipProbeNoise(t *testing.T) {
 		t.Fatalf("expected quiet healthz logs, got %s", logs.String())
 	}
 
-	body := `{"model":"grok-4.5","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://example.test/image.png"}]}]}`
+	body := `{"model":"grok-4.5","input":[{"type":"message","role":"user","content":[{"type":"input_audio","audio_url":"https://example.test/a.wav"}]}]}`
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	request.Header.Set("User-Agent", "test-agent/1.0")
 	recorder := httptest.NewRecorder()

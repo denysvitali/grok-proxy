@@ -36,13 +36,63 @@ func TestAnthropicRequestTranslatesConversationAndTools(t *testing.T) {
 	}
 }
 
-func TestAnthropicRequestRejectsImages(t *testing.T) {
+func TestAnthropicRequestTranslatesBase64Image(t *testing.T) {
+	request := anthropic.MessagesRequest{
+		Model: "claude-sonnet", MaxTokens: 100,
+		Messages: []anthropic.Message{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"what is this?"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc123"}}]`)}},
+	}
+	translated, err := AnthropicRequest(request, "grok-4.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var items []openai.InputItem
+	if err := json.Unmarshal(translated.Input, &items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("unexpected item count: %#v", items)
+	}
+	var parts []openai.InputContent
+	if err := json.Unmarshal(items[0].Content, &parts); err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 || parts[0].Type != "input_text" || parts[1].Type != "input_image" {
+		t.Fatalf("unexpected content parts: %#v", parts)
+	}
+	if parts[1].ImageURL != "data:image/png;base64,abc123" {
+		t.Fatalf("unexpected image url: %q", parts[1].ImageURL)
+	}
+}
+
+func TestAnthropicRequestTranslatesURLImage(t *testing.T) {
+	request := anthropic.MessagesRequest{
+		Model: "claude-sonnet", MaxTokens: 100,
+		Messages: []anthropic.Message{{Role: "user", Content: json.RawMessage(`[{"type":"image","source":{"type":"url","url":"https://example.test/a.png"}}]`)}},
+	}
+	translated, err := AnthropicRequest(request, "grok-4.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var items []openai.InputItem
+	if err := json.Unmarshal(translated.Input, &items); err != nil {
+		t.Fatal(err)
+	}
+	var parts []openai.InputContent
+	if err := json.Unmarshal(items[0].Content, &parts); err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 1 || parts[0].Type != "input_image" || parts[0].ImageURL != "https://example.test/a.png" {
+		t.Fatalf("unexpected content parts: %#v", parts)
+	}
+}
+
+func TestAnthropicRequestRejectsIncompleteImage(t *testing.T) {
 	request := anthropic.MessagesRequest{
 		Model: "claude-sonnet", MaxTokens: 100,
 		Messages: []anthropic.Message{{Role: "user", Content: json.RawMessage(`[{"type":"image","source":{"type":"base64"}}]`)}},
 	}
 	if _, err := AnthropicRequest(request, "grok-4.5"); err == nil {
-		t.Fatal("expected image input to be rejected")
+		t.Fatal("expected incomplete image source to be rejected")
 	}
 }
 

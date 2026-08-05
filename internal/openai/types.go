@@ -41,8 +41,10 @@ type InputItem struct {
 }
 
 type InputContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 type FunctionTool struct {

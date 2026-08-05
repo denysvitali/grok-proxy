@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/denysvitali/grok-proxy/internal/grok"
 	"github.com/denysvitali/grok-proxy/internal/openai"
@@ -96,8 +97,15 @@ func validateOpenAIInput(raw json.RawMessage) error {
 			return errors.New("message content must be an array")
 		}
 		for _, part := range content {
-			if part.Type != "input_text" && part.Type != "output_text" {
-				return errors.New("image, audio, and file inputs are not supported")
+			switch part.Type {
+			case "input_text", "output_text":
+				// text is always accepted
+			case "input_image":
+				if strings.TrimSpace(part.ImageURL) == "" {
+					return errors.New("input_image requires image_url")
+				}
+			default:
+				return errors.New("audio and file inputs are not supported")
 			}
 		}
 	}

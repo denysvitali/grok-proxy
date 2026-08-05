@@ -172,6 +172,12 @@ func anthropicInput(messages []anthropic.Message) ([]openai.InputItem, error) {
 			switch block.Type {
 			case "text":
 				textParts = append(textParts, openai.InputContent{Type: contentType, Text: block.Text})
+			case "image":
+				imageURL, err := imageURLFromSource(block.Source)
+				if err != nil {
+					return nil, err
+				}
+				textParts = append(textParts, openai.InputContent{Type: "input_image", ImageURL: imageURL})
 			case "tool_use":
 				if err := flushText(); err != nil {
 					return nil, err
@@ -231,4 +237,33 @@ func decodeText(raw json.RawMessage) (string, error) {
 		result.WriteString(block.Text)
 	}
 	return result.String(), nil
+}
+
+func imageURLFromSource(source *anthropic.ImageSource) (string, error) {
+	if source == nil {
+		return "", errors.New("image block is missing source")
+	}
+	switch source.Type {
+	case "base64":
+		mediaType := strings.TrimSpace(source.MediaType)
+		data := strings.TrimSpace(source.Data)
+		if mediaType == "" {
+			return "", errors.New("image base64 source requires media_type")
+		}
+		if data == "" {
+			return "", errors.New("image base64 source requires data")
+		}
+		if strings.HasPrefix(data, "data:") {
+			return data, nil
+		}
+		return "data:" + mediaType + ";base64," + data, nil
+	case "url":
+		url := strings.TrimSpace(source.URL)
+		if url == "" {
+			return "", errors.New("image url source requires url")
+		}
+		return url, nil
+	default:
+		return "", fmt.Errorf("unsupported image source type %q", source.Type)
+	}
 }

@@ -73,9 +73,10 @@ result in the configured `auth_file`; keep the page open until it reports that
 login succeeded. Return to `/` to view account and usage information fetched
 from the same account services as Grok Build.
 
-The first release supports text, system/developer instructions, function
-tools, tool results, reasoning settings, usage, and SSE streaming. Image,
-audio, file, batch, and WebSocket requests are rejected explicitly.
+The first release supports text, images (Anthropic `image` blocks and OpenAI
+`input_image`), system/developer instructions, function tools, tool results,
+reasoning settings, usage, and SSE streaming. Audio, file, batch, and
+WebSocket requests are rejected explicitly.
 
 ### Claude Code
 
