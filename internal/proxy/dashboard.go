@@ -10,19 +10,29 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/denysvitali/grok-proxy/internal/grok"
 )
 
+var dashboardNow = time.Now
+
 type dashboardRow struct {
-	Label string
-	Value string
+	Label     string
+	Value     string
+	Secondary string
+	DateTime  string
 }
 
 type dashboardUsage struct {
 	HasPercent   bool
 	Percent      string
 	PercentValue string
+	Tone         string
+	Remaining    string
+	ResetsLabel  string
+	PeriodEndAt  string
+	PeriodEndISO string
 	Rows         []dashboardRow
 }
 
@@ -146,6 +156,10 @@ func accountView(account grok.Account) (string, []dashboardRow) {
 }
 
 func usageView(billing grok.Billing) dashboardUsage {
+	return usageViewAt(billing, dashboardNow())
+}
+
+func usageViewAt(billing grok.Billing, current time.Time) dashboardUsage {
 	view := dashboardUsage{HasPercent: true}
 	percent := 0.0
 	if billing.CreditUsagePercent.Valid {
@@ -156,10 +170,30 @@ func usageView(billing grok.Billing) dashboardUsage {
 	percent = max(0, min(100, percent))
 	view.Percent = fmt.Sprintf("%.1f%%", percent)
 	view.PercentValue = strconv.FormatFloat(percent, 'f', 2, 64)
+	view.Tone = usageTone(percent)
+	if billing.MonthlyLimit.Valid && billing.Used.Valid {
+		left := (billing.MonthlyLimit.Value - billing.Used.Value) / 100
+		if left < 0 {
+			left = 0
+		}
+		view.Remaining = fmt.Sprintf("$%.2f left", left)
+	}
+
+	current = current.UTC()
 	addRow(&view.Rows, "Subscription", billing.SubscriptionTier)
-	addRow(&view.Rows, "Period", strings.TrimPrefix(billing.CurrentPeriod.Type, "USAGE_PERIOD_TYPE_"))
-	addRow(&view.Rows, "Period start", firstDisplay(billing.CurrentPeriod.Start, billing.BillingPeriodStart))
-	addRow(&view.Rows, "Period end", firstDisplay(billing.CurrentPeriod.End, billing.BillingPeriodEnd))
+	addRow(&view.Rows, "Period", titleWords(strings.TrimPrefix(billing.CurrentPeriod.Type, "USAGE_PERIOD_TYPE_")))
+	addPeriodRow(&view.Rows, "Period start", firstDisplay(billing.CurrentPeriod.Start, billing.BillingPeriodStart))
+	endRaw := firstDisplay(billing.CurrentPeriod.End, billing.BillingPeriodEnd)
+	if end, dateOnly, ok := parseTime(endRaw); ok {
+		rel := formatRelative(current, end, dateOnly)
+		abs := formatDisplayTime(end, dateOnly)
+		view.PeriodEndAt = abs
+		view.PeriodEndISO = timeAttr(end, dateOnly)
+		view.ResetsLabel = resetLabel(current, end, dateOnly)
+		addTimeRow(&view.Rows, "Period end", rel, abs, timeAttr(end, dateOnly))
+	} else {
+		addRow(&view.Rows, "Period end", endRaw)
+	}
 	addCentRow(&view.Rows, "Included used", billing.Used)
 	addCentRow(&view.Rows, "Included limit", billing.MonthlyLimit)
 	addCentRow(&view.Rows, "Extra usage used", billing.OnDemandUsed)
@@ -178,6 +212,184 @@ func addRow(rows *[]dashboardRow, label, value string) {
 	if value != "" {
 		*rows = append(*rows, dashboardRow{Label: label, Value: value})
 	}
+}
+
+func addTimeRow(rows *[]dashboardRow, label, value, secondary, datetime string) {
+	if value == "" {
+		return
+	}
+	*rows = append(*rows, dashboardRow{Label: label, Value: value, Secondary: secondary, DateTime: datetime})
+}
+
+func addPeriodRow(rows *[]dashboardRow, label, raw string) {
+	if parsed, dateOnly, ok := parseTime(raw); ok {
+		addTimeRow(rows, label, formatDisplayTime(parsed, dateOnly), "", timeAttr(parsed, dateOnly))
+		return
+	}
+	addRow(rows, label, raw)
+}
+
+func usageTone(percent float64) string {
+	switch {
+	case percent >= 90:
+		return "danger"
+	case percent >= 70:
+		return "warn"
+	default:
+		return "ok"
+	}
+}
+
+func resetLabel(now, end time.Time, dateOnly bool) string {
+	rel := formatRelative(now, end, dateOnly)
+	if periodEnded(now, end, dateOnly) {
+		switch rel {
+		case "today":
+			return "Ended today"
+		case "yesterday":
+			return "Ended yesterday"
+		default:
+			return "Ended " + rel
+		}
+	}
+	switch rel {
+	case "today":
+		return "Resets today"
+	case "tomorrow":
+		return "Resets tomorrow"
+	case "now":
+		return "Resets now"
+	default:
+		return "Resets " + rel
+	}
+}
+
+func periodEnded(now, end time.Time, dateOnly bool) bool {
+	if dateOnly {
+		endDay := utcDay(end)
+		today := utcDay(now)
+		return endDay.Before(today)
+	}
+	return end.Before(now)
+}
+
+func parseTime(value string) (time.Time, bool, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false, false
+	}
+	if parsed, err := time.Parse("2006-01-02", value); err == nil {
+		return parsed, true, true
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05", "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC(), false, true
+		}
+	}
+	if n, err := strconv.ParseInt(value, 10, 64); err == nil {
+		switch {
+		case n > 1e12:
+			return time.UnixMilli(n).UTC(), false, true
+		case n > 1e9:
+			return time.Unix(n, 0).UTC(), false, true
+		}
+	}
+	return time.Time{}, false, false
+}
+
+func formatDisplayTime(value time.Time, dateOnly bool) string {
+	if dateOnly {
+		return value.Format("2 Jan 2006")
+	}
+	return value.UTC().Format("2 Jan 2006, 15:04 UTC")
+}
+
+func timeAttr(value time.Time, dateOnly bool) string {
+	if dateOnly {
+		return value.Format("2006-01-02")
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func formatRelative(now, target time.Time, dateOnly bool) string {
+	now = now.UTC()
+	target = target.UTC()
+	if dateOnly {
+		days := int(utcDay(target).Sub(utcDay(now)).Hours() / 24)
+		switch days {
+		case 0:
+			return "today"
+		case 1:
+			return "tomorrow"
+		case -1:
+			return "yesterday"
+		default:
+			if days > 1 {
+				return fmt.Sprintf("in %d days", days)
+			}
+			return fmt.Sprintf("%d days ago", -days)
+		}
+	}
+	delta := target.Sub(now)
+	future := delta >= 0
+	if !future {
+		delta = -delta
+	}
+	switch {
+	case delta < 45*time.Second:
+		if future {
+			return "now"
+		}
+		return "just now"
+	case delta < 90*time.Second:
+		return relativeUnit(future, 1, "min")
+	case delta < 45*time.Minute:
+		return relativeUnit(future, max(1, int(delta.Round(time.Minute).Minutes())), "min")
+	case delta < 90*time.Minute:
+		return relativeUnit(future, 1, "hour")
+	case delta < 22*time.Hour:
+		return relativeUnit(future, max(1, int(delta.Round(time.Hour).Hours())), "hours")
+	case delta < 36*time.Hour:
+		if future {
+			return "tomorrow"
+		}
+		return "yesterday"
+	default:
+		days := max(1, int(delta.Hours()/24))
+		if days == 1 {
+			return relativeUnit(future, 1, "day")
+		}
+		return relativeUnit(future, days, "days")
+	}
+}
+
+func relativeUnit(future bool, count int, unit string) string {
+	if count == 1 {
+		unit = strings.TrimSuffix(unit, "s")
+	}
+	if future {
+		return fmt.Sprintf("in %d %s", count, unit)
+	}
+	return fmt.Sprintf("%d %s ago", count, unit)
+}
+
+func utcDay(value time.Time) time.Time {
+	value = value.UTC()
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func titleWords(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "_", " "))
+	if value == "" {
+		return ""
+	}
+	parts := strings.Fields(strings.ToLower(value))
+	for i, part := range parts {
+		runes := []rune(part)
+		runes[0] = unicode.ToUpper(runes[0])
+		parts[i] = string(runes)
+	}
+	return strings.Join(parts, " ")
 }
 
 func addCentRow(rows *[]dashboardRow, label string, value grok.Number) {
@@ -271,7 +483,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype
           <div class="notice notice-error">{{.UsageError}}</div>
         {{else}}
           {{if .Usage.HasPercent}}
-          <div class="usage-hero">
+          <div class="usage-hero tone-{{.Usage.Tone}}">
             <div class="ring" style="--value: {{.Usage.PercentValue}};" aria-hidden="true">
               <div class="ring-inner">
                 <div>
@@ -282,16 +494,23 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype
             </div>
             <div class="usage-copy">
               <h3>Credit usage this period</h3>
-              <p>Live billing data from the same services used by Grok Build.</p>
+              <p>{{if .Usage.ResetsLabel}}{{if .Usage.PeriodEndISO}}<time datetime="{{.Usage.PeriodEndISO}}" title="{{.Usage.PeriodEndAt}}">{{.Usage.ResetsLabel}}</time>{{else}}{{.Usage.ResetsLabel}}{{end}}{{if .Usage.PeriodEndAt}} <span class="reset-abs">· {{.Usage.PeriodEndAt}}</span>{{end}}{{else}}Live billing data from the same services used by Grok Build.{{end}}</p>
               <div class="pill-row">
                 <span class="pill"><strong>{{.Usage.Percent}}</strong> of included credits</span>
+                {{if .Usage.Remaining}}<span class="pill">{{.Usage.Remaining}}</span>{{end}}
               </div>
             </div>
           </div>
           {{end}}
           <dl class="meta-list">
             {{range .Usage.Rows}}
-            <div class="meta-row"><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>
+            <div class="meta-row">
+              <dt>{{.Label}}</dt>
+              <dd>
+                {{if .DateTime}}<time datetime="{{.DateTime}}"{{if .Secondary}} title="{{.Secondary}}"{{end}}>{{.Value}}</time>{{else}}{{.Value}}{{end}}
+                {{if .Secondary}}<span class="meta-secondary">{{.Secondary}}</span>{{end}}
+              </dd>
+            </div>
             {{end}}
           </dl>
         {{end}}

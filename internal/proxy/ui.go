@@ -190,6 +190,10 @@ h1 {
   border-color: rgba(255,255,255,0.22);
 }
 .btn:active, button:active { transform: scale(0.98); }
+.btn:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible {
+  outline: 2px solid rgba(139, 124, 246, 0.85);
+  outline-offset: 2px;
+}
 .btn-primary, button.primary {
   background: linear-gradient(135deg, #f8fafc, #dbe4ff);
   color: #0b1020;
@@ -299,6 +303,14 @@ h1 {
   font-weight: 560;
   font-size: 0.95rem;
 }
+.meta-row time { font-weight: inherit; }
+.meta-secondary {
+  display: block;
+  margin-top: 3px;
+  color: var(--faint);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
 .usage-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -309,6 +321,7 @@ h1 {
 }
 .ring {
   --value: 0;
+  --ring: var(--accent);
   width: 104px;
   height: 104px;
   border-radius: 999px;
@@ -317,9 +330,12 @@ h1 {
   justify-self: start;
   background:
     radial-gradient(circle at center, rgba(10,12,18,0.96) 58%, transparent 59%),
-    conic-gradient(from 210deg, var(--accent) calc(var(--value) * 1%), rgba(255,255,255,0.08) 0);
+    conic-gradient(from 210deg, var(--ring) calc(var(--value) * 1%), rgba(255,255,255,0.08) 0);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
 }
+.tone-ok .ring { --ring: var(--ok); }
+.tone-warn .ring { --ring: var(--warn); }
+.tone-danger .ring { --ring: var(--danger); }
 .ring-inner {
   width: 74px;
   height: 74px;
@@ -351,6 +367,8 @@ h1 {
   line-height: 1.5;
   font-size: 0.92rem;
 }
+.usage-copy time { color: var(--text); font-weight: 650; }
+.usage-copy .reset-abs { color: var(--faint); }
 .pill-row {
   display: flex;
   flex-wrap: wrap;

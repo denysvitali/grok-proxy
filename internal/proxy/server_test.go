@@ -409,6 +409,7 @@ func TestDashboardPromptsForLoginWithoutCredentials(t *testing.T) {
 }
 
 func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
+	freezeDashboardNow(t, time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC))
 	handler := newTestServerWithConfig(t, config.Config{
 		BaseURL: "https://upstream.example/v1",
 		Server:  config.ServerConfig{Listen: "127.0.0.1:8080", MaxBodyBytes: 1 << 20},
@@ -471,10 +472,17 @@ func TestDashboardDisplaysAccountUsageAndProxyStatus(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 	page := recorder.Body.String()
-	for _, expected := range []string{"Ada Lovelace", "SuperGrok", "42.5%", "$4.25", "$0.12", "WEEKLY", "grok-4.5", "Opted out"} {
+	for _, expected := range []string{
+		"Ada Lovelace", "SuperGrok", "42.5%", "$4.25", "$0.12", "$5.75 left",
+		"Weekly", "in 2 days", "20 Jul 2026", "Resets in 2 days",
+		`datetime="2026-07-20"`, "grok-4.5", "Opted out", "tone-ok",
+	} {
 		if !strings.Contains(page, expected) {
 			t.Errorf("dashboard missing %q: %s", expected, page)
 		}
+	}
+	if strings.Contains(page, "WEEKLY") {
+		t.Fatal("dashboard still shows raw period type")
 	}
 	if strings.Contains(page, "subscription-token") {
 		t.Fatal("dashboard exposed the access token")
@@ -530,4 +538,86 @@ func TestUsageViewShowsZeroWhenPercentageAndLegacyLimitAreAbsent(t *testing.T) {
 	if !view.HasPercent || view.Percent != "0.0%" || view.PercentValue != "0.00" {
 		t.Fatalf("usage percentage = %#v", view)
 	}
+}
+
+func TestUsageViewFormatsPeriodEndAsRelativeTime(t *testing.T) {
+	current := time.Date(2026, 8, 10, 15, 4, 5, 0, time.UTC)
+	view := usageViewAt(grok.Billing{
+		Available:        true,
+		SubscriptionTier: "SuperGrok",
+		CurrentPeriod:    grok.UsagePeriod{Type: "USAGE_PERIOD_TYPE_WEEKLY", Start: "2026-08-04", End: "2026-08-11"},
+		MonthlyLimit:     grok.Number{Value: 1000, Valid: true},
+		Used:             grok.Number{Value: 750, Valid: true},
+	}, current)
+	if view.Tone != "warn" || view.Remaining != "$2.50 left" || view.ResetsLabel != "Resets tomorrow" {
+		t.Fatalf("usage hero = %#v", view)
+	}
+	if got := rowValue(view.Rows, "Period"); got != "Weekly" {
+		t.Fatalf("period = %q", got)
+	}
+	if got := rowValue(view.Rows, "Period start"); got != "4 Aug 2026" {
+		t.Fatalf("period start = %q", got)
+	}
+	end := rowByLabel(view.Rows, "Period end")
+	if end.Value != "tomorrow" || end.Secondary != "11 Aug 2026" || end.DateTime != "2026-08-11" {
+		t.Fatalf("period end = %#v", end)
+	}
+}
+
+func TestUsageViewFormatsTimestampPeriodEnd(t *testing.T) {
+	current := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	view := usageViewAt(grok.Billing{
+		Available:        true,
+		BillingPeriodEnd: "2026-08-10T15:30:00Z",
+	}, current)
+	if view.ResetsLabel != "Resets in 4 hours" {
+		t.Fatalf("reset label = %q", view.ResetsLabel)
+	}
+	end := rowByLabel(view.Rows, "Period end")
+	if end.Value != "in 4 hours" || end.Secondary != "10 Aug 2026, 15:30 UTC" {
+		t.Fatalf("period end = %#v", end)
+	}
+}
+
+func TestFormatRelativeDateOnly(t *testing.T) {
+	current := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)
+	cases := []struct {
+		target string
+		want   string
+	}{
+		{"2026-08-12", "today"},
+		{"2026-08-13", "tomorrow"},
+		{"2026-08-11", "yesterday"},
+		{"2026-08-17", "in 5 days"},
+		{"2026-08-07", "5 days ago"},
+	}
+	for _, tc := range cases {
+		got, dateOnly, ok := parseTime(tc.target)
+		if !ok || !dateOnly {
+			t.Fatalf("parse %q = %v %v %v", tc.target, got, dateOnly, ok)
+		}
+		if rel := formatRelative(current, got, true); rel != tc.want {
+			t.Errorf("formatRelative(%s) = %q, want %q", tc.target, rel, tc.want)
+		}
+	}
+}
+
+func freezeDashboardNow(t *testing.T, frozen time.Time) {
+	t.Helper()
+	previous := dashboardNow
+	dashboardNow = func() time.Time { return frozen }
+	t.Cleanup(func() { dashboardNow = previous })
+}
+
+func rowByLabel(rows []dashboardRow, label string) dashboardRow {
+	for _, row := range rows {
+		if row.Label == label {
+			return row
+		}
+	}
+	return dashboardRow{}
+}
+
+func rowValue(rows []dashboardRow, label string) string {
+	return rowByLabel(rows, label).Value
 }
