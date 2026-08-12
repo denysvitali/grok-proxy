@@ -36,27 +36,32 @@ func AnthropicRequest(request anthropic.MessagesRequest, model string) (openai.R
 		return openai.ResponsesRequest{}, err
 	}
 
-	tools := make([]openai.FunctionTool, 0, len(request.Tools))
-	for _, tool := range request.Tools {
-		tools = append(tools, openai.FunctionTool{
-			Type:        "function",
-			Name:        tool.Name,
-			Description: tool.Description,
-			Parameters:  tool.InputSchema,
-			Strict:      false,
-		})
-	}
-	encodedTools, err := json.Marshal(tools)
-	if err != nil {
-		return openai.ResponsesRequest{}, err
-	}
-
-	toolChoice := json.RawMessage(`"auto"`)
+	var encodedTools json.RawMessage
+	var toolChoice json.RawMessage
 	parallelToolCalls := true
-	if request.ToolChoice != nil {
+	if len(request.Tools) > 0 {
+		tools := make([]openai.FunctionTool, 0, len(request.Tools))
+		for _, tool := range request.Tools {
+			tools = append(tools, openai.FunctionTool{
+				Type:        "function",
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  tool.InputSchema,
+				Strict:      false,
+			})
+		}
+		encoded, marshalErr := json.Marshal(tools)
+		if marshalErr != nil {
+			return openai.ResponsesRequest{}, marshalErr
+		}
+		encodedTools = encoded
+		toolChoice = json.RawMessage(`"auto"`)
+	}
+	if request.ToolChoice != nil && (len(request.Tools) > 0 || request.ToolChoice.Type == "none") {
 		parallelToolCalls = !request.ToolChoice.DisableParallelToolUse
 		switch request.ToolChoice.Type {
 		case "auto":
+			toolChoice = json.RawMessage(`"auto"`)
 		case "any":
 			toolChoice = json.RawMessage(`"required"`)
 		case "none":
@@ -192,7 +197,7 @@ func anthropicInput(messages []anthropic.Message) ([]openai.InputItem, error) {
 				if err := flushText(); err != nil {
 					return nil, err
 				}
-				output, err := decodeText(block.Content)
+				output, images, err := decodeToolResult(block.Content)
 				if err != nil {
 					return nil, fmt.Errorf("tool result: %w", err)
 				}
@@ -201,6 +206,13 @@ func anthropicInput(messages []anthropic.Message) ([]openai.InputItem, error) {
 					CallID: block.ToolUseID,
 					Output: output,
 				})
+				if len(images) > 0 {
+					content, marshalErr := json.Marshal(images)
+					if marshalErr != nil {
+						return nil, marshalErr
+					}
+					items = append(items, openai.InputItem{Type: "message", Role: "user", Content: content})
+				}
 			case "thinking", "redacted_thinking":
 				// Thinking from earlier turns is provider-specific and is not replayed.
 			default:
@@ -215,28 +227,55 @@ func anthropicInput(messages []anthropic.Message) ([]openai.InputItem, error) {
 }
 
 func decodeText(raw json.RawMessage) (string, error) {
+	text, images, err := decodeContentBlocks(raw, false)
+	if err != nil {
+		return "", err
+	}
+	if len(images) > 0 {
+		return "", errors.New("content contains a non-text block")
+	}
+	return text, nil
+}
+
+func decodeToolResult(raw json.RawMessage) (string, []openai.InputContent, error) {
+	return decodeContentBlocks(raw, true)
+}
+
+func decodeContentBlocks(raw json.RawMessage, allowImages bool) (string, []openai.InputContent, error) {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return "", nil
+		return "", nil, nil
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		return text, nil
+		return text, nil, nil
 	}
 	var blocks []anthropic.ContentBlock
 	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return "", errors.New("content is not text")
+		return "", nil, errors.New("content is not text")
 	}
 	var result strings.Builder
+	var images []openai.InputContent
 	for _, block := range blocks {
-		if block.Type != "text" {
-			return "", errors.New("content contains a non-text block")
+		switch block.Type {
+		case "text":
+			if result.Len() != 0 {
+				result.WriteByte('\n')
+			}
+			result.WriteString(block.Text)
+		case "image":
+			if !allowImages {
+				return "", nil, errors.New("content contains a non-text block")
+			}
+			imageURL, err := imageURLFromSource(block.Source)
+			if err != nil {
+				return "", nil, err
+			}
+			images = append(images, openai.InputContent{Type: "input_image", ImageURL: imageURL})
+		default:
+			return "", nil, fmt.Errorf("unsupported content block type %q", block.Type)
 		}
-		if result.Len() != 0 {
-			result.WriteByte('\n')
-		}
-		result.WriteString(block.Text)
 	}
-	return result.String(), nil
+	return result.String(), images, nil
 }
 
 func imageURLFromSource(source *anthropic.ImageSource) (string, error) {
